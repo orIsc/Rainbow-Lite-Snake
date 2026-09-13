@@ -36,6 +36,20 @@ CPU is the default; pass `--device cuda` for a compatible CUDA installation.
 PyTorch 2.6 CPU was verified locally; the newer 2.14 build failed to initialize
 its native DLLs on this Windows machine.
 
+## GPU training
+
+For NVIDIA GPU training, install the CUDA build in the same environment:
+
+```powershell
+.\.venv312\Scripts\python.exe -m pip install --upgrade torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+.\.venv312\Scripts\python.exe train.py --device cuda --episodes 2000 --output snake-gpu.pt
+```
+
+The training script prints the selected device at startup. GPU runs still execute
+the Snake environment and replay sampling on the CPU. The CUDA build is listed in
+the [official PyTorch installation instructions](https://pytorch.org/get-started/previous-versions/#v260).
+
+
 ## Local benchmark
 
 A checkpoint saved after 300 training episodes on the 8x8 board averaged 11.10

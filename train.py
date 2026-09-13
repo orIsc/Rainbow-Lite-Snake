@@ -180,6 +180,12 @@ def main():
     torch.manual_seed(args.seed)
     torch.set_num_threads(args.threads)
     device = torch.device(args.device)
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            parser.error("CUDA is unavailable. Install CUDA-enabled PyTorch or use --device cpu.")
+        print(f"Device: {device} ({torch.cuda.get_device_name(device)})", flush=True)
+    else:
+        print(f"Device: {device}", flush=True)
     if args.evaluate:
         evaluate(args, device)
     else:
