@@ -1,118 +1,165 @@
-# Rainbow-Lite Snake
+# Rainbow DQN Snake
 
-A from-scratch grid environment and PyTorch agent. Use Python 3.12 with the
-pinned PyTorch 2.6 dependency. No Gym, rendering library, or external Snake
-engine is needed. Virtual environments, caches, and generated checkpoints are
-excluded from the repository.
+PyTorch implementation of CNN + dueling NoisyNet + C51 + Double DQN +
+prioritized replay + configurable n-step returns (default 3).
 
-## Run
+## Files
 
-Clone the repository and install with Python 3.12 (Windows PowerShell):
+- `snake_env.py`: Gymnasium environment with `reset(seed=...)` and the five-value
+  `step()` API. Binary uint8 observation `(3, 10, 10)` ordered food, body, walls.
+- `network.py`: CNN followed by `nn.Flatten`, separate noisy value and advantage
+  streams, and 51 probabilities per action. Comments explain factorized noise
+  and per-atom dueling aggregation.
+- `replay.py`: proportional PER with importance weights and n-step aggregation.
+- `train.py`: C51 projection, Double DQN selection/evaluation, weighted
+  cross-entropy, KL-based priorities, target synchronization, training/evaluation.
+- `test_components.py`: environment, noise, replay, projection, and optimizer tests.
 
-```powershell
-git clone https://github.com/orIsc/Rainbow-Lite-Snake.git
-cd Rainbow-Lite-Snake
-py -3.12 -m venv .venv312
-.\.venv312\Scripts\python.exe -m pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
+## Install and run
+
+Use Python 3.12 with the pinned PyTorch version. In an activated virtual environment:
+
+```sh
+python -m pip install -r requirements.txt
+python -m unittest -v
+python train.py --episodes 2000 --output rainbow.pt
+python train.py --evaluate rainbow.best.pt --episodes 10 --seed 12345 --render
 ```
 
-To train a fresh model and evaluate its best validation checkpoint:
+CPU is the default. Use `--device cuda` with a compatible CUDA-enabled PyTorch
+installation. `--help` lists all hyperparameters. A quick training smoke test:
 
-```powershell
-.\.venv312\Scripts\python.exe train.py --episodes 2000
-.\.venv312\Scripts\python.exe train.py --evaluate snake.best.pt --episodes 5 --render
-.\.venv312\Scripts\python.exe -m unittest -v
+```sh
+python train.py --episodes 3 --max-steps 30 --hidden 16 --batch-size 4 --warmup 4 --capacity 100 --target-every 2 --eval-episodes 2 --output rainbow-smoke.pt
 ```
 
-Use the explicit environment interpreter instead of bare `python` or `pip` to
-avoid accidentally using a different installed Python version. In VS Code,
-select `.venv312\Scripts\python.exe` as the interpreter. Python 3.14 is not
-compatible with the pinned PyTorch 2.6 package.
+## Gameplay popup
 
-For macOS/Linux, create the environment with `python3.12 -m venv .venv312`,
-replace `.\.venv312\Scripts\python.exe` with `.venv312/bin/python`, and install
-with `.venv312/bin/python -m pip install -r requirements.txt`.
-CPU is the default; pass `--device cuda` for a compatible CUDA installation.
-PyTorch 2.6 CPU was verified locally; the newer 2.14 build failed to initialize
-its native DLLs on this Windows machine.
-
-## GPU training
-
-For NVIDIA GPU training, install the CUDA build in the same environment:
+Training automatically records the highest-food episode (ties prefer higher total
+reward) as `checkpoints/replays/<output-stem>.best-run.json` for bare output names. This records the actual moves, including
+exploration, even though network weights change during training.
 
 ```powershell
-.\.venv312\Scripts\python.exe -m pip install --upgrade torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
-.\.venv312\Scripts\python.exe train.py --device cuda --episodes 2000 --output snake-gpu.pt
+.\.venv-c51\Scripts\python.exe train.py --episodes 2000 --output rainbow-10x10.pt --watch-best
+.\.venv-c51\Scripts\python.exe viewer.py
 ```
 
-The training script prints the selected device at startup. GPU runs still execute
-the Snake environment and replay sampling on the CPU. The CUDA build is listed in
-the [official PyTorch installation instructions](https://pytorch.org/get-started/previous-versions/#v260).
+`--watch-best` opens the popup in a separate process when training finishes, so
+the training command exits immediately and releases its GPU resources.
+The viewer defaults to `rainbow-10x10.best-run.json`.
+You can also run `viewer.py`
+in a second terminal during training to watch the best episode saved so far.
+The viewer loads a snapshot when opened; reopen it to load a newer record.
+The window has Pause/Play, Replay, and speed controls. Space pauses; Escape closes.
+The bright green cell is the head, green cells the body, and pink circles food.
 
-
-## Local benchmark
-
-A checkpoint saved after 300 training episodes on the 8x8 board averaged 11.10
-food on 100 test games with seed 12345, compared with 0.24 for the original
-grid-only model. Test seeds were separate from training and checkpoint-selection
-seeds. These are results from one training run, not a guarantee across training
-seeds. The verification run was stopped after the 300-episode checkpoint.
-The locally trained `snake-improved.best.pt` is not included in this repository;
-train a model using the commands above to generate your own checkpoint.
-
-## Components
-
-* `snake_env.py`: grid Snake with straight/left/right actions. Observations encode
-  ordered body positions, head, food, heading, and starvation budget, plus seven
-  derived features: danger for each action, normalized forward/right food offsets,
-  and their signs. These help the MLP learn across positions without masking any
-  action or providing a scripted policy. Entering a
-  moving tail is legal. Food gives +1, collision/starvation -1, other steps -0.01.
-* `network.py`: every fully connected layer is a custom factorized Gaussian
-  `NoisyLinear` with learned weight/bias means and standard deviations. Separate
-  value and advantage streams combine as `Q = V + A - mean(A)`.
-* `replay.py`: `deque(maxlen=3)` aggregates returns, then proportional PER stores
-  them. New entries receive the current maximum priority. Sampling uses
-  `P(i) = priority(i)**alpha / sum(priority**alpha)` with replacement.
-* `train.py`: noise-based action selection, weighted Huber loss, TD-error priority
-  updates, target synchronization, checkpoint saving, and deterministic evaluation.
-  Defaults use one optimizer update per step after warmup and learning rate 0.0005.
-
-Every 100 episodes, training evaluates the deterministic policy on 20 fixed
-validation games using a separate seed. `snake.best.pt` contains the best
-validation checkpoint, while `snake.pt` contains the final weights. Evaluate with
-a different seed for an independent performance check, for example
-`--evaluate snake.best.pt --episodes 100 --seed 12345`.
-The reported score counts food eaten, not shaped reward or snake length.
-Old grid-only checkpoints still load, but the new features require fresh training.
-
-## How the upgrades interact
-
-1. Fresh network noise drives each greedy training action, including during replay
-   warmup. There is no epsilon-greedy action selection. Noise is also independently
-   refreshed in online and target networks for each optimization step.
-2. The waiting room produces `R = r0 + gamma*r1 + gamma**2*r2`. When an episode
-   ends it flushes all remaining suffixes, each with its actual `gamma**k` and
-   terminal flag. No transitions span episodes.
-3. PER draws these aggregated transitions and supplies normalized importance
-   weights `(N*P(i))**(-beta)`. Beta anneals from 0.4 to 1 over optimizer updates.
-4. Dueling Q values feed the Double DQN target:
-   `R + gamma**k * (1-done) * Q_target(next_state, argmax Q_online(next_state))`.
-   The weighted Huber loss trains both streams and the noise parameters. Absolute
-   unweighted TD errors plus a small epsilon become the new replay priorities.
-
-The target remains in training mode so its NoisyLinear layers remain stochastic;
-`torch.no_grad()` prevents target gradients. Evaluation uses `eval()` to select
-actions from learned means alone. Starvation is an actual terminal game rule.
-
-This is a compact reference implementation: PER sampling and maximum-priority
-lookup are O(buffer size). A sum tree is a useful later optimization for large
-buffers. Checkpoints contain model weights and architecture for evaluation, not
-the replay/optimizer/RNG state needed to resume training exactly. Training quality
-depends on run length and seed; a smoke test does not establish convergence.
-
-Quick smoke test:
+For existing checkpoints that have no recorded training trajectory:
 
 ```powershell
-.\.venv312\Scripts\python.exe train.py --episodes 10 --size 4 --hidden 32 --batch-size 8 --warmup 8 --train-every 1 --target-every 5 --log-every 1 --output smoke.pt
+.\.venv-c51\Scripts\python.exe viewer.py --checkpoint rainbow.best.pt --episodes 20
 ```
+
+This evaluates 20 games and displays the best evaluation, rather than reconstructing
+an old training episode. Custom output names use a matching replay name, e.g.
+`--output experiment.pt` saves `experiment.best-run.json`; open it with
+`viewer.py --replay experiment.best-run.json`. The popup uses Python's Tkinter
+(included in the prepared Windows environment), with no extra pip dependency.
+
+## Environment conventions
+
+The default 10x10 grid includes its outer wall border, leaving an 8x8 playable interior.
+Actions are `0=up`, `1=down`, `2=left`, `3=right`. A reverse request continues
+straight. Moving into the tail is legal when the tail moves away on that step.
+Food gives +10; wall/self collision gives -10; other steps give -0.01.
+Filling the interior terminates successfully with the final food reward.
+
+Episodes truncate after 2000 steps by default to bound loops; change
+`--max-steps` or construct `SnakeEnv(max_steps=None)` to disable the limit.
+Time-limit truncations retain bootstrapping. Both truncations and terminations
+flush n-step suffixes so replay never mixes episodes. Only true termination
+suppresses the bootstrap. This follows the
+[Gymnasium environment API](https://gymnasium.farama.org/api/env/).
+
+The exact requested binary body plane includes the head but does not distinguish
+it or encode heading/body order. Thus a single observation is partially observable.
+This implementation preserves that specification; adding a head/heading channel,
+frame stacking, or recurrence would be useful extensions for stronger learning.
+
+## Learning details
+
+NoisyLinear learns mean and noise-scale parameters. Factorized Gaussian noise is
+resampled for each training action and optimizer update; there is no epsilon-greedy
+policy. Evaluation uses the learned means (`eval()`). Online and target networks
+use independent noise during learning; the target has no gradients.
+
+The network returns `(batch, 4, 51)` distributions. Expected Q-values are
+`sum(probability * atom_value)`. The online network selects the next action;
+the target network supplies that action's categorical distribution. The n-step
+Bellman target `R_n + gamma**k * Z` is clipped and linearly projected onto the
+fixed support, including exact atom hits without losing probability mass.
+Cross-entropy uses stable log-softmax, importance weights, and gradient clipping.
+Unweighted KL divergence plus epsilon supplies PER priorities. Beta anneals from
+0.4 to 1; target weights synchronize every 500 optimizer updates by default.
+
+The 51-atom support defaults to [-10, 100], configurable with `--v-min/--v-max`.
+This is an approximation: returns outside the support are clipped. Monitor and
+adjust the support for longer/high-scoring runs. Rewards are not rescaled.
+
+Replay stores uint8 observations (roughly 30 MB for two 10x10x3 arrays per
+50,000 transitions, plus Python overhead). This readable implementation samples
+PER in O(capacity); a sum/min tree is an optimization for larger replay buffers.
+
+Validation runs every 100 episodes and saves `rainbow.best.pt`; the final model
+is `rainbow.pt`. Lightweight model checkpoints support evaluation or continuation
+from learned weights; full `.resume.pt` files preserve training state. Old Rainbow-Lite checkpoints are
+incompatible with the new architecture and require fresh training. A smoke test
+checks execution, not policy convergence or playing strength.
+
+## Continue training
+
+Continue your existing best 10x10 model for 2000 additional episodes, saving under
+a new name to preserve the original baseline:
+
+```powershell
+python train.py --resume rainbow-10x10.best.pt --device cuda --episodes 2000 --output rainbow-10x10-continued.pt --watch-best
+```
+
+Older checkpoints restore model weights and counters, with a fresh optimizer and
+empty replay buffer. Warmup refills replay before updates resume. Architecture
+and grid size come from the checkpoint automatically.
+
+New training runs save `OUTPUT.resume.pt` every 100 episodes (`--save-every`)
+and at completion. These contain online/target networks, optimizer, replay data
+and priorities, counters, training settings, environment/replay/Python/PyTorch RNG
+states, recent scores, and the best recorded run. Save files are replaced atomically.
+Checkpoints are at episode boundaries, so no partial n-step queue is required.
+After interruption, resume from the latest saved boundary; unsaved episodes are lost.
+
+```powershell
+python train.py --resume rainbow-10x10-continued.resume.pt --device cuda --episodes 2000 --output rainbow-10x10-next.pt --watch-best
+```
+
+Full resume restores saved training hyperparameters, overriding their CLI values.
+You can choose the device, output, additional episode count, logging interval,
+save interval, and viewer option. Same-device CPU continuation was verified
+against an uninterrupted run; bitwise equivalence across devices/CUDA is not promised.
+The starting policy is evaluated and retained as a candidate for the new run's
+best checkpoint, so subsequent regression does not discard it. Historical best
+model files from earlier runs remain separate; use a new output name to keep them.
+More training can improve or worsen performance; compare evaluation averages.
+
+
+## Checkpoint folders
+
+Artifacts are organized by file type:
+
+- `checkpoints/best/`: best validation model weights (`*.best.pt`).
+- `checkpoints/final/`: final model weights (`*.pt`).
+- `checkpoints/resume/`: full training state (`*.resume.pt`).
+- `checkpoints/replays/`: recorded best training games (`*.best-run.json`).
+
+Existing artifacts have been moved into these folders. Bare filenames still work
+with `--resume`, `--evaluate`, and the viewer; the scripts look in the matching
+folder automatically. A bare `--output experiment.pt` writes each artifact into
+its corresponding folder. An explicit output path such as `runs/test.pt` keeps
+all artifacts together in that explicitly chosen directory.

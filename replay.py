@@ -2,6 +2,7 @@
 from collections import deque
 from dataclasses import dataclass
 import numpy as np
+import torch
 
 
 @dataclass
@@ -10,14 +11,17 @@ class Transition:
     action: int
     reward: float
     next_state: np.ndarray
-    done: bool
+    done: bool  # True termination only; time limits still bootstrap.
     discount: float  # gamma ** actual number of aggregated steps
 
 
 class NStepAccumulator:
-    def __init__(self, gamma=0.99):
+    def __init__(self, gamma=0.99, n=3):
+        if n < 1 or not 0 <= gamma <= 1:
+            raise ValueError("Invalid n-step parameters")
         self.gamma = gamma
-        self.waiting_room = deque(maxlen=3)
+        self.n = n
+        self.waiting_room = deque()
 
     def _finalize(self):
         reward, discount = 0.0, 1.0
@@ -29,15 +33,15 @@ class NStepAccumulator:
         state, action = self.waiting_room[0][:2]
         return Transition(state.copy(), action, reward, next_state.copy(), done, discount)
 
-    def append(self, state, action, reward, next_state, done):
+    def append(self, state, action, reward, next_state, done, truncated=False):
         self.waiting_room.append((state.copy(), action, reward, next_state.copy(), done))
         finalized = []
-        if done:
-            # Flush 3-, 2-, and 1-step suffixes. Nothing crosses episode boundaries.
+        if done or truncated:
+            # Flush all suffixes on either boundary. Truncations retain done=False.
             while self.waiting_room:
                 finalized.append(self._finalize())
                 self.waiting_room.popleft()
-        elif len(self.waiting_room) == 3:
+        elif len(self.waiting_room) == self.n:
             finalized.append(self._finalize())
             self.waiting_room.popleft()
         return finalized
@@ -55,6 +59,23 @@ class PrioritizedReplayBuffer:
 
     def __len__(self):
         return len(self.data)
+
+    def state_dict(self):
+        # Only tensors and primitive containers, compatible with weights_only=True.
+        return {"capacity": self.capacity, "alpha": self.alpha, "epsilon": self.epsilon,
+                "position": self.position, "rng": self.rng.bit_generator.state,
+                "priorities": torch.from_numpy(self.priorities.copy()),
+                "data": [(torch.from_numpy(t.state.copy()), t.action, t.reward,
+                          torch.from_numpy(t.next_state.copy()), t.done, t.discount)
+                         for t in self.data]}
+
+    def load_state_dict(self, state):
+        self.capacity, self.alpha, self.epsilon = state["capacity"], state["alpha"], state["epsilon"]
+        self.position = state["position"]
+        self.priorities = state["priorities"].cpu().numpy().copy()
+        self.data = [Transition(s.cpu().numpy().copy(), a, r, ns.cpu().numpy().copy(), d, g)
+                     for s, a, r, ns, d, g in state["data"]]
+        self.rng.bit_generator.state = state["rng"]
 
     def add(self, transition):
         priority = self.priorities[:len(self)].max() if self.data else 1.0

@@ -1,5 +1,8 @@
 .venv/
 .venv312/
+.venv-c51/
 __pycache__/
 *.pt
+*.best-run.json
+*.best-run.json.tmp
 .uv-cache/
